@@ -1,109 +1,182 @@
 document.addEventListener("DOMContentLoaded", () => {
-    d3.csv("data.csv").then(function(data) {
+    d3.csv("data.csv").then(function (data) {
         console.log("Dữ liệu đã load:", data);
 
+        // Kiểm tra dữ liệu có cột hợp lệ không
         if (!data.length || !data[0]["Mã nhóm hàng"] || !data[0]["Tên nhóm hàng"] || !data[0]["Mã mặt hàng"] || !data[0]["Tên mặt hàng"] || !data[0]["Mã đơn hàng"]) {
             console.error("⚠️ Tên cột không đúng hoặc dữ liệu trống! Kiểm tra file CSV.");
             return;
         }
 
-        // Tạo cột Tháng
+        // 🟢 Tạo khung tiêu đề riêng
+        d3.select("#Q10") // Chỉnh sửa từ "#chart" thành "#Q10"
+          .append("div")
+          .attr("id", "title-container")
+          .style("display", "flex")
+          .style("align-items", "center")
+          .style("justify-content", "center")
+          .style("width", "100%")
+          .style("background-color", "#2a5d87")
+          .style("color", "#ffffff")
+          .style("font-size", "22px")
+          .style("font-weight", "bold")
+          .style("padding", "15px 10px")
+          .style("border-radius", "5px")
+          .style("margin-bottom", "15px")
+          .text("Xác suất bán hàng của Mặt hàng theo Nhóm hàng trong từng Tháng");
+
+        // 🟢 Tạo khung chứa biểu đồ
+        const chartContainer = d3.select("#Q10") // Chỉnh sửa từ "#chart" thành "#Q10"
+            .append("div")
+            .attr("id", "chart-container")
+            .style("display", "grid")
+            .style("grid-template-columns", "repeat(auto-fit, minmax(550px, 1fr))")
+            .style("gap", "10px");
+
+        // 🟢 Tạo Tooltip
+        const tooltip = d3.select("body").append("div")
+            .style("position", "absolute")
+            .style("background", "#fff") 
+            .style("color", "#333") 
+            .style("padding", "8px")
+            .style("border-radius", "5px")
+            .style("font-size", "12px")
+            .style("box-shadow", "0px 0px 5px rgba(0, 0, 0, 0.2)") 
+            .style("visibility", "hidden")
+            .style("pointer-events", "none")
+            .style("border", "1px solid #ccc")
+            .style("white-space", "nowrap"); 
+
+        // 🟢 Thêm cột Tháng từ "Thời gian tạo đơn"
         data.forEach(d => {
-            d["Tháng"] = "T" + d["Thời gian tạo đơn"].slice(5, 7); // Trích xuất tháng từ "Thời gian tạo đơn"
-            d["Nhóm hàng"] = `[${d["Mã nhóm hàng"]}] ${d["Tên nhóm hàng"]}`;
-            d["Mặt hàng"] = `[${d["Mã mặt hàng"]}] ${d["Tên mặt hàng"]}`;
+            d.Tháng = new Date(d["Thời gian tạo đơn"]).getMonth() + 1;
         });
 
-        // Tính tổng số đơn hàng theo nhóm hàng và mặt hàng
-        const mhNhOrders = d3.rollup(data, v => new Set(v.map(d => d["Mã đơn hàng"]).filter(Boolean)).size, d => d["Mặt hàng"], d => d["Nhóm hàng"], d => d["Tháng"]);
-        const nhOrders = d3.rollup(data, v => new Set(v.map(d => d["Mã đơn hàng"]).filter(Boolean)).size, d => d["Nhóm hàng"], d => d["Tháng"]);
+        // 🟢 Nhóm dữ liệu theo "Mã nhóm hàng"
+        const groupedByProductGroup = d3.group(data, d => d["Mã nhóm hàng"]);
 
-        let dataset = [];
-        mhNhOrders.forEach((groupData, item) => {
-            groupData.forEach((monthData, group) => {
-                monthData.forEach((count, month) => {
-                    const total = nhOrders.get(group)?.get(month) || 1;
-                    dataset.push({
-                        group,
-                        item,
-                        month,
-                        probability: (count / total) * 100
-                    });
-                });
+        // 🟢 Xử lý dữ liệu theo từng nhóm
+        const probabilitiesByGroup = Array.from(groupedByProductGroup, ([groupCode, groupData]) => {
+            const groupName = groupData[0]["Tên nhóm hàng"];
+
+            // 🟢 Lấy danh sách mặt hàng trong nhóm
+            const items = Array.from(new Set(groupData.map(d => d["Mã mặt hàng"]))).map(itemCode => {
+                const itemData = groupData.find(d => d["Mã mặt hàng"] === itemCode);
+                return {
+                    itemCode,
+                    itemName: itemData["Tên mặt hàng"]
+                };
             });
+
+            // 🟢 Tính xác suất theo tháng cho từng mặt hàng
+            const monthlyProbabilities = Array.from(d3.group(groupData, d => d.Tháng), ([month, monthData]) => {
+                const totalMonthOrders = new Set(monthData.map(d => d["Mã đơn hàng"])).size;
+
+                const itemProbabilities = items.map(item => {
+                    const itemMonthData = monthData.filter(d => d["Mã mặt hàng"] === item.itemCode);
+                    const itemOrders = new Set(itemMonthData.map(d => d["Mã đơn hàng"])).size;
+                    return {
+                        month,
+                        itemCode: item.itemCode,
+                        itemName: item.itemName,
+                        probability: itemOrders / totalMonthOrders,
+                        totalOrders: itemOrders
+                    };
+                });
+
+                return itemProbabilities;
+            }).flat();
+
+            return {
+                groupCode,
+                groupName,
+                items,
+                monthlyProbabilities
+            };
         });
 
-        // Lọc nhóm hàng muốn hiển thị
-        const selectedGroups = ["[BOT] Bột", "[SET] Set trà", "[THO] Trà hoa", "[TMX] Trà mix", "[TTC] Trà củ, quả sấy"];
-        dataset = dataset.filter(d => selectedGroups.includes(d.group));
+        // 🟢 Tạo tập hợp màu duy nhất cho tất cả mặt hàng
+        const allItems = Array.from(new Set(data.map(d => d["Mã mặt hàng"])));
+        const colorScale = d3.scaleOrdinal()
+            .domain(allItems)
+            .range(d3.schemeCategory10);
 
-        // Thiết lập biểu đồ
-        const container = d3.select("#Q10");
-        container.selectAll("svg").remove();
+        // 🔧 Kích thước biểu đồ
+        const margin = { top: 40, right: 50, bottom: 50, left: 60 },
+              width  = 450,
+              height = 250;
 
-        const chartWidth = 350, chartHeight = 250, margin = {top: 30, right: 30, bottom: 50, left: 60};
-        const tooltip = d3.select(".tooltip");
+        // 🟢 Vẽ biểu đồ cho từng Nhóm hàng
+        probabilitiesByGroup.forEach(group => {
+            const chartDiv = chartContainer.append("div")
+                                           .style("border", "1px solid #ccc")
+                                           .style("padding", "10px")
+                                           .style("background", "#f9f9f9")
+                                           .style("border-radius", "5px")
+                                           .style("overflow", "auto");
 
-        selectedGroups.forEach(group => {
-            const groupData = dataset.filter(d => d.group === group);
-            const months = Array.from(new Set(groupData.map(d => d.month))).sort();
-            const items = Array.from(new Set(groupData.map(d => d.item)));
+            chartDiv.append("h3")
+                    .text(`[${group.groupCode}] ${group.groupName}`)
+                    .style("color", "#2a5d87")
+                    .style("text-align", "center")
+                    .style("margin-bottom", "10px");
 
-            const svg = container.append("svg")
-                .attr("width", chartWidth + margin.left + margin.right)
-                .attr("height", chartHeight + margin.top + margin.bottom)
-                .append("g")
-                .attr("transform", `translate(${margin.left},${margin.top})`);
+            const svg = chartDiv.append("svg")
+                    .attr("width", width + margin.left + margin.right)
+                    .attr("height", height + margin.top + margin.bottom)
+                    .append("g")
+                    .attr("transform", `translate(${margin.left}, ${margin.top})`);
 
-            const x = d3.scaleBand().domain(months).range([0, chartWidth]).padding(0.1);
-            const y = d3.scaleLinear().domain([0, d3.max(groupData, d => d.probability)]).nice().range([chartHeight, 0]);
-            const color = d3.scaleOrdinal(d3.schemeCategory10).domain(items);
+            // 🟢 Trục X (Tháng 1 → 12)
+            const x = d3.scaleLinear()
+                        .domain([1, 12])
+                        .range([0, width]);
 
-            // Trục X và Y
-            svg.append("g").attr("transform", `translate(0,${chartHeight})`).call(d3.axisBottom(x));
-            svg.append("g").call(d3.axisLeft(y).ticks(5).tickFormat(d => d + "%"));
+            // 🟢 Trục Y (Xác suất %)
+            const y = d3.scaleLinear()
+                        .domain([0, d3.max(group.monthlyProbabilities, d => d.probability)])
+                        .nice()
+                        .range([height, 0]);
 
-            // Vẽ các đường cho từng mặt hàng
-            items.forEach(item => {
-                const itemData = groupData.filter(d => d.item === item);
-                const line = d3.line().x(d => x(d.month) + x.bandwidth() / 2).y(d => y(d.probability));
+            // 🟢 Vẽ từng đường cho mỗi mặt hàng
+            group.items.forEach(item => {
+                const itemData = group.monthlyProbabilities.filter(d => d.itemCode === item.itemCode);
 
                 svg.append("path")
-                    .datum(itemData)
-                    .attr("class", "line")
-                    .attr("d", line)
-                    .attr("stroke", color(item));
+                   .datum(itemData)
+                   .attr("fill", "none")
+                   .attr("stroke", colorScale(item.itemCode))
+                   .attr("stroke-width", 2)
+                   .attr("d", d3.line()
+                       .x(d => x(d.month))
+                       .y(d => y(d.probability))
+                       .curve(d3.curveLinear)); // 🔥 SỬA curveMonotoneX thành curveLinear
 
-                svg.selectAll(".dot")
-                    .data(itemData)
-                    .enter()
-                    .append("circle")
-                    .attr("cx", d => x(d.month) + x.bandwidth() / 2)
-                    .attr("cy", d => y(d.probability))
-                    .attr("r", 4)
-                    .attr("fill", color(item))
-                    .on("mouseover", function(event, d) {
-                        tooltip.style("display", "block")
-                            .html(`Mặt hàng: ${d.item}<br>Tháng: ${d.month}<br>Xác suất: ${d.probability.toFixed(2)}%`)
-                            .style("left", (event.pageX + 10) + "px")
-                            .style("top", (event.pageY - 20) + "px");
-                    })
-                    .on("mousemove", function(event) {
-                        tooltip.style("left", (event.pageX + 10) + "px")
-                            .style("top", (event.pageY - 20) + "px");
-                    })
-                    .on("mouseout", function() {
-                        tooltip.style("display", "none");
-                    });
+                svg.selectAll("circle-" + item.itemCode)
+                   .data(itemData)
+                   .enter()
+                   .append("circle")
+                   .attr("cx", d => x(d.month))
+                   .attr("cy", d => y(d.probability))
+                   .attr("r", 4)
+                   .attr("fill", colorScale(item.itemCode))
+                   .on("mouseover", function (event, d) {
+                       tooltip.style("visibility", "visible")
+                           .html(`<strong>T${d.month} | Mặt hàng ${d.itemCode} ${d.itemName}</strong><br>
+                                  Nhóm hàng: ${group.groupName} | SL Đơn Bán: ${d3.format(",")(d.totalOrders)}<br>
+                                  Xác suất Bán / Nhóm hàng: ${d3.format(".1%")(d.probability)}`);
+                   })
+                   .on("mousemove", function (event) {
+                       tooltip.style("top", `${event.pageY - 10}px`).style("left", `${event.pageX + 10}px`);
+                   })
+                   .on("mouseout", function () {
+                       tooltip.style("visibility", "hidden");
+                   });
             });
 
-            // Tiêu đề nhóm hàng
-            svg.append("text")
-                .attr("x", chartWidth / 2)
-                .attr("y", -10)
-                .attr("text-anchor", "middle")
-                .style("font-size", "16px")
-                .text(group);
+            // 🟢 Thêm trục X và Y
+            svg.append("g").attr("transform", `translate(0, ${height})`).call(d3.axisBottom(x).tickFormat(d => `T${d}`));
+            svg.append("g").call(d3.axisLeft(y).ticks(5).tickFormat(d3.format(".0%")));
         });
-    }).catch(error => console.error("Lỗi khi đọc CSV:", error));
+    });
 });
